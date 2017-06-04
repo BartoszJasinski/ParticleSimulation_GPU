@@ -4,118 +4,174 @@
 
 #include <stdio.h>
 
-cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
+#include "ParticleSystem.h"
 
-__global__ void addKernel(int *c, const int *a, const int *b)
+__host__ cudaError_t simulateParticles(int);
+
+__global__ void simulateParticles()
 {
-    int i = threadIdx.x;
-    c[i] = a[i] + b[i];
+	
+
 }
 
 int main()
 {
-    const int arraySize = 5;
-    const int a[arraySize] = { 1, 2, 3, 4, 5 };
-    const int b[arraySize] = { 10, 20, 30, 40, 50 };
-    int c[arraySize] = { 0 };
 
-    // Add vectors in parallel.
-    cudaError_t cudaStatus = addWithCuda(c, a, b, arraySize);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addWithCuda failed!");
-        return 1;
-    }
+	// Add vectors in parallel.
+	cudaError_t cudaStatus = simulateParticles(1);
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "addWithCuda failed!");
+		return 1;
+	}
 
-    printf("{1,2,3,4,5} + {10,20,30,40,50} = {%d,%d,%d,%d,%d}\n",
-        c[0], c[1], c[2], c[3], c[4]);
+	// cudaDeviceReset must be called before exiting in order for profiling and
+	// tracing tools such as Nsight and Visual Profiler to show complete traces.
+	cudaStatus = cudaDeviceReset();
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "cudaDeviceReset failed!");
+		return 1;
+	}
 
-    // cudaDeviceReset must be called before exiting in order for profiling and
-    // tracing tools such as Nsight and Visual Profiler to show complete traces.
-    cudaStatus = cudaDeviceReset();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceReset failed!");
-        return 1;
-    }
-
-    return 0;
+	return 0;
 }
 
-// Helper function for using CUDA to add vectors in parallel.
-cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size)
+int ParticleDims(ParticleSystem particle_system)
 {
-    int *dev_a = 0;
-    int *dev_b = 0;
-    int *dev_c = 0;
-    cudaError_t cudaStatus;
+	return(6 * particle_system->number_of_particles);
+};
 
-    // Choose which GPU to run on, change this on a multi-GPU system.
-    cudaStatus = cudaSetDevice(0);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
-        goto Error;
-    }
+int ParticleGetState(ParticleSystem particle_system, float *dst)
+{
+	for (int i = 0; i < particle_system->number_of_particles; i++)
+	{
+		*(dst++) = particle_system->particle[i]->p.x;
+		*(dst++) = particle_system->particle[i]->p.y;
+		*(dst++) = particle_system->particle[i]->p.z;
+		*(dst++) = particle_system->particle[i]->v.x;
+		*(dst++) = particle_system->particle[i]->v.y;
+		*(dst++) = particle_system->particle[i]->v.z;
+	}
+}
 
-    // Allocate GPU buffers for three vectors (two input, one output)    .
-    cudaStatus = cudaMalloc((void**)&dev_c, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
+int ParticleSetState(ParticleSystem particle_system, float *src)
+{
+	for (int i = 0; i < particle_system->number_of_particles; i++) {
+		particle_system->particle[i]->p.x = *(src++);
+		particle_system->particle[i]->p.y = *(src++);
+		particle_system->particle[i]->p.z = *(src++);
+		particle_system->particle[i]->v.x = *(src++);
+		particle_system->particle[i]->v.y = *(src++);
+		particle_system->particle[i]->v.z = *(src++);
+	}
+}
 
-    cudaStatus = cudaMalloc((void**)&dev_a, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
+void Clear_Forces(ParticleSystem particle_system);
 
-    cudaStatus = cudaMalloc((void**)&dev_b, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
+void Compute_Forces(ParticleSystem particle_system);
 
-    // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_a, a, size * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
+int ParticleDerivative(ParticleSystem particle_system, float *dst)
+{
+	
+	Clear_Forces(particle_system);   /* zero the force accumulators */
+	Compute_Forces(particle_system); /* magic force function */
+	for (int i = 0; i < particle_system->number_of_particles; i++) {
+		*(dst++) = particle_system->particle[i]->v.x;    /* xdot=v*/
+		*(dst++) = particle_system->particle[i]->v.y;
+		*(dst++) = particle_system->particle[i]->v.z;
+		*(dst++) = particle_system->particle[i]->f.x / particle_system->particle[i]->m; /* vdot = f/m */
+		*(dst++) = particle_system->particle[i]->f.y / particle_system->particle[i]->m;
+		*(dst++) = particle_system->particle[i]->f.z / particle_system->particle[i]->m;
+	}
+}
 
-    cudaStatus = cudaMemcpy(dev_b, b, size * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
+void ScaleVector(float* temp1, float delta_t);
 
-    // Launch a kernel on the GPU with one thread for each element.
-    addKernel<<<1, size>>>(dev_c, dev_a, dev_b);
+void AddVectors(float* vector1, float* vector2, float* result);
 
-    // Check for any errors launching the kernel
-    cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
-        goto Error;
-    }
-    
-    // cudaDeviceSynchronize waits for the kernel to finish, and returns
-    // any errors encountered during the launch.
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching addKernel!\n", cudaStatus);
-        goto Error;
-    }
+void EulerStep(ParticleSystem particle_system, float DeltaT)
+{
+	float *temp1, *temp2;
+	ParticleDerivative(particle_system, temp1);   /* get deriv */
+	ScaleVector(temp1, DeltaT);       /* scale it */
+	ParticleGetState(particle_system, temp2);      /* get state */
+	AddVectors(temp1, temp2, temp2);  /* add -> temp2 */
+	ParticleSetState(particle_system, temp2);      /* update state */
+	particle_system->t += DeltaT;                 /* update time */
+}
 
-    // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(c, dev_c, size * sizeof(int), cudaMemcpyDeviceToHost);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
 
-Error:
-    cudaFree(dev_c);
-    cudaFree(dev_a);
-    cudaFree(dev_b);
-    
-    return cudaStatus;
+__host__ cudaError_t simulateParticles(int)
+{
+	//    cudaError_t cudaStatus;
+	//
+	//    // Choose which GPU to run on, change this on a multi-GPU system.
+	//    cudaStatus = cudaSetDevice(0);
+	//    if (cudaStatus != cudaSuccess) {
+	//        fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
+	//        goto Error;
+	//    }
+	//
+	//    // Allocate GPU buffers for three vectors (two input, one output)    .
+	//    cudaStatus = cudaMalloc((void**)&dev_c, size * sizeof(int));
+	//    if (cudaStatus != cudaSuccess) {
+	//        fprintf(stderr, "cudaMalloc failed!");
+	//        goto Error;
+	//    }
+	//
+	//    cudaStatus = cudaMalloc((void**)&dev_a, size * sizeof(int));
+	//    if (cudaStatus != cudaSuccess) {
+	//        fprintf(stderr, "cudaMalloc failed!");
+	//        goto Error;
+	//    }
+	//
+	//    cudaStatus = cudaMalloc((void**)&dev_b, size * sizeof(int));
+	//    if (cudaStatus != cudaSuccess) {
+	//        fprintf(stderr, "cudaMalloc failed!");
+	//        goto Error;
+	//    }
+	//
+	//    // Copy input vectors from host memory to GPU buffers.
+	//    cudaStatus = cudaMemcpy(dev_a, a, size * sizeof(int), cudaMemcpyHostToDevice);
+	//    if (cudaStatus != cudaSuccess) {
+	//        fprintf(stderr, "cudaMemcpy failed!");
+	//        goto Error;
+	//    }
+	//
+	//    cudaStatus = cudaMemcpy(dev_b, b, size * sizeof(int), cudaMemcpyHostToDevice);
+	//    if (cudaStatus != cudaSuccess) {
+	//        fprintf(stderr, "cudaMemcpy failed!");
+	//        goto Error;
+	//    }
+	//
+	//    // Launch a kernel on the GPU with one thread for each element.
+	//    addKernel<<<1, size>>>(dev_c, dev_a, dev_b);
+	//
+	//    // Check for any errors launching the kernel
+	//    cudaStatus = cudaGetLastError();
+	//    if (cudaStatus != cudaSuccess) {
+	//        fprintf(stderr, "addKernel launch failed: %s\number_of_particles", cudaGetErrorString(cudaStatus));
+	//        goto Error;
+	//    }
+	//    
+	//    // cudaDeviceSynchronize waits for the kernel to finish, and returns
+	//    // any errors encountered during the launch.
+	//    cudaStatus = cudaDeviceSynchronize();
+	//    if (cudaStatus != cudaSuccess) {
+	//        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching addKernel!\number_of_particles", cudaStatus);
+	//        goto Error;
+	//    }
+	//
+	//    // Copy output vector from GPU buffer to host memory.
+	//    cudaStatus = cudaMemcpy(c, dev_c, size * sizeof(int), cudaMemcpyDeviceToHost);
+	//    if (cudaStatus != cudaSuccess) {
+	//        fprintf(stderr, "cudaMemcpy failed!");
+	//        goto Error;
+	//    }
+	//
+	//Error:
+	//    cudaFree(dev_c);
+	//    cudaFree(dev_a);
+	//    cudaFree(dev_b);
+	//    
+	//    return cudaStatus;
 }
