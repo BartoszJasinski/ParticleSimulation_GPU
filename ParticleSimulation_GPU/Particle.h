@@ -8,4 +8,6 @@ typedef struct
 	float3 p;
 	float3 v;
 	float3 f;
+	float r;
+
 } *Particle;
